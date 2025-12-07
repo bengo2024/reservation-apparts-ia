@@ -1,0 +1,36 @@
+name: Trello Auto-Move
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  move-card:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extraire l'ID Trello du commit
+        id: extract
+        run: |
+          MSG="${{ github.event.head_commit.message }}"
+          CARD=$(echo "$MSG" | grep -oE '\[TRELLO-[A-Za-z0-9]{8,}\]' | tr -d '[]' | cut -d- -f2)
+          echo "card_id=$CARD" >> $GITHUB_OUTPUT
+
+      - name: Déplacer vers Review / Test
+        if: steps.extract.outputs.card_id != ''
+        env:
+          KEY: ${{ secrets.TRELLO_API_KEY }}
+          TOKEN: ${{ secrets.TRELLO_TOKEN }}
+          LIST_ID: ${{ secrets.TRELLO_LIST_REVIEW }}
+        run: |
+          curl -X PUT "https://api.trello.com/1/cards/${{ steps.extract.outputs.card_id }}" \
+            -d "key=$KEY" -d "token=$TOKEN" -d "idList=$LIST_ID"
+
+      - name: Ajouter un commentaire
+        if: steps.extract.outputs.card_id != ''
+        env:
+          KEY: ${{ secrets.TRELLO_API_KEY }}
+          TOKEN: ${{ secrets.TRELLO_TOKEN }}
+        run: |
+          curl -X POST "https://api.trello.com/1/cards/${{ steps.extract.outputs.card_id }}/actions/comments" \
+            -d "key=$KEY" -d "token=$TOKEN" \
+            -d "text=Commit par @${{ github.actor }}%0A${{ github.event.head_commit.message }}%0ALien : ${{ github.event.head_commit.url }}"
