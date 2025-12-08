@@ -13,30 +13,52 @@ jobs:
         run: |
           MSG="${{ github.event.head_commit.message }}"
           CARD=$(echo "$MSG" | grep -oE '\[TRELLO-[A-Za-z0-9]{8,}\]' | tr -d '[]' | cut -d- -f2)
-          ITEM=$(echo "$MSG" | grep -oP 'Coche \K.+(?=$)')
+          ITEM=$(echo "$MSG" | grep -oP 'Coche \K[^ ]+')
           echo "card_id=$CARD" >> $GITHUB_OUTPUT
           echo "item_name=$ITEM" >> $GITHUB_OUTPUT
 
-      - name: Récupérer ID checklist et item
+      - name: Récupérer checklist et item (robuste)
         if: steps.extract.outputs.card_id != '' && steps.extract.outputs.item_name != ''
         id: get-ids
         run: |
-          CHECKLIST_ID=$(curl "https://api.trello.com/1/cards/${{ steps.extract.outputs.card_id }}/checklists" \
-            -d "key=${{ secrets.TRELLO_API_KEY }}" -d "token=${{ secrets.TRELLO_TOKEN }}" | jq -r '[ .[] | .id ] | first')
-          ITEM_ID=$(curl "https://api.trello.com/1/checklists/$CHECKLIST_ID/checkItems" \
-            -d "key=${{ secrets.TRELLO_API_KEY }}" -d "token=${{ secrets.TRELLO_TOKEN }}" | jq -r '.[] | select(.name=="${{ steps.extract.outputs.item_name }}") | .id')
+          # Debug : log la réponse API
+          CHECKLIST_RESPONSE=$(curl -s "https://api.trello.com/1/cards/${{ steps.extract.outputs.card_id }}/checklists?key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}")
+          echo "Checklist API response: $CHECKLIST_RESPONSE"
+          
+          # Vérifier si réponse est array, sinon erreur
+          if [[ "$CHECKLIST_RESPONSE" == "null" || "$CHECKLIST_RESPONSE" == "" ]]; then
+            echo "No checklists found"
+            exit 0
+          fi
+          
+          CHECKLIST_ID=$(echo "$CHECKLIST_RESPONSE" | jq -r 'if type == "array" then .[0].id else empty end')
+          if [[ "$CHECKLIST_ID" == "null" ]]; then
+            echo "No checklist ID found"
+            exit 0
+          fi
+          
+          # Debug item response
+          ITEM_RESPONSE=$(curl -s "https://api.trello.com/1/checklists/$CHECKLIST_ID/checkItems?key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}")
+          echo "Item API response: $ITEM_RESPONSE"
+          
+          ITEM_ID=$(echo "$ITEM_RESPONSE" | jq -r --arg item "${{ steps.extract.outputs.item_name }}" '.[] | select(.name == $item) | .id')
+          if [[ "$ITEM_ID" == "null" ]]; then
+            echo "No item ID found for '${{ steps.extract.outputs.item_name }}'"
+            exit 0
+          fi
+          
           echo "checklist_id=$CHECKLIST_ID" >> $GITHUB_OUTPUT
           echo "item_id=$ITEM_ID" >> $GITHUB_OUTPUT
 
       - name: Cocher la sous-tâche
         if: steps.get-ids.outputs.item_id != ''
         run: |
-          curl -X PUT "https://api.trello.com/1/cards/${{ steps.extract.outputs.card_id }}/checkItem/${{ steps.get-ids.outputs.item_id }}" \
-            -d "key=${{ secrets.TRELLO_API_KEY }}" -d "token=${{ secrets.TRELLO_TOKEN }}" -d "state=complete"
+          curl -X PUT "https://api.trello.com/1/cards/${{ steps.extract.outputs.card_id }}/checkItem/${{ steps.get-ids.outputs.item_id }}?key=${{ secrets.TRELLO_API_KEY }}&token=${{ secrets.TRELLO_TOKEN }}&state=complete"
 
       - name: Ajouter commentaire
         if: steps.extract.outputs.card_id != ''
         run: |
           curl -X POST "https://api.trello.com/1/cards/${{ steps.extract.outputs.card_id }}/actions/comments" \
-            -d "key=${{ secrets.TRELLO_API_KEY }}" -d "token=${{ secrets.TRELLO_TOKEN }}" \
+            -d "key=${{ secrets.TRELLO_API_KEY }}" \
+            -d "token=${{ secrets.TRELLO_TOKEN }}" \
             -d "text=Commit par @${{ github.actor }}%0A${{ github.event.head_commit.message }}%0ALien : ${{ github.event.head_commit.url }}"
