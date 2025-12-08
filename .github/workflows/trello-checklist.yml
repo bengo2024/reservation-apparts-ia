@@ -1,0 +1,46 @@
+name: Trello – Coche sous-tâche et déplace
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  trello:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extraire ID carte et nom sous-tâche
+        id: parse
+        run: |
+          MSG="${{ github.event.head_commit.message }}"
+          CARD=$(echo "$MSG" | grep -oP '\[TRELLO-\K[A-Za-z0-9]+')
+          ITEM=$(echo "$MSG" | grep -oP 'Coche \K.*')
+          echo "CARD_ID=$CARD" >> $GITHUB_OUTPUT
+          echo "ITEM_NAME=$ITEM" >> $GITHUB_OUTPUT
+
+      - name: Cocher la sous-tâche + déplacer selon progression
+        if: steps.parse.outputs.CARD_ID != ''
+        env:
+          KEY: ${{ secrets.TRELLO_API_KEY }}
+          TOKEN: ${{ secrets.TRELLO_TOKEN }}
+        run: |
+          CARD="${{ steps.parse.outputs.CARD_ID }}"
+          ITEM="${{ steps.parse.outputs.ITEM_NAME }}"
+
+          # 1. Cocher la sous-tâche (on prend la première checklist)
+          CHECKLIST=$(curl -s "https://api.trello.com/1/cards/$CARD/checklists?key=$KEY&token=$TOKEN" | jq -r '.[0].id')
+          curl -s "https://api.trello.com/1/checklists/$CHECKLIST/checkItems" \
+               -X POST --data "name=$ITEM&checked=true&key=$KEY&token=$TOKEN"
+
+          # 2. Vérifier la progression et déplacer
+          PROGRESS=$(curl -s "https://api.trello.com/1/cards/$CARD?fields=badges&key=$KEY&token=$TOKEN" | jq '.badges.checkItemsChecked')
+          TOTAL=$(curl -s "https://api.trello.com/1/cards/$CARD?fields=badges&key=$KEY&token=$TOKEN" | jq '.badges.checkItems')
+
+          if [ "$PROGRESS" -eq 0 ]; then
+            echo "Aucune sous-tâche → reste en To Do"
+          elif [ "$PROGRESS" -eq "$TOTAL" ]; then
+            curl -s -X PUT "https://api.trello.com/1/cards/$CARD?key=$KEY&token=$TOKEN&idList=${{ secrets.TRELLO_LIST_DONE }}"
+            echo "Tout terminé → Done !"
+          else
+            curl -s -X PUT "https://api.trello.com/1/cards/$CARD?key=$KEY&token=$TOKEN&idList=${{ secrets.TRELLO_LIST_DOING }}"
+            echo "En cours → Doing !"
+          fi
