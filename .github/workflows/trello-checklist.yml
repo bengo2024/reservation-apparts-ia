@@ -36,8 +36,7 @@ jobs:
 
           if [[ -n "$ITEM_ID" && "$ITEM_ID" != "null" ]]; then
             echo "Coche l'item existant : $ITEM"
-            curl -X PUT "https://api.trello.com/1/cards/$CARD/checkItem/$ITEM_ID \
-              -d "key=$KEY" -d "token=$TOKEN" -d "state=complete"
+            curl -X PUT "https://api.trello.com/1/cards/$CARD/checkItem/$ITEM_ID?key=$KEY&token=$TOKEN&state=complete"
           else
             echo "Item '$ITEM' non trouvé → rien à cocher"
           fi
