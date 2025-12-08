@@ -1,4 +1,4 @@
-name: Trello – Coche sous-tâche et déplace
+name: Trello – Cocher sous-tâche existante
 
 on:
   push:
@@ -8,7 +8,7 @@ jobs:
   trello:
     runs-on: ubuntu-latest
     steps:
-      - name: Extraire ID carte et nom sous-tâche
+      - name: Extraire ID carte et nom exact
         id: parse
         run: |
           MSG="${{ github.event.head_commit.message }}"
@@ -16,9 +16,10 @@ jobs:
           ITEM=$(echo "$MSG" | grep -oP 'Coche \K.*')
           echo "CARD_ID=$CARD" >> $GITHUB_OUTPUT
           echo "ITEM_NAME=$ITEM" >> $GITHUB_OUTPUT
+          echo "Commit message: $MSG"
 
-      - name: Cocher la sous-tâche + déplacer selon progression
-        if: steps.parse.outputs.CARD_ID != ''
+      - name: Cocher une sous-tâche EXISTANTE
+        if: steps.parse.outputs.CARD_ID != '' && steps.parse.outputs.ITEM_NAME != ''
         env:
           KEY: ${{ secrets.TRELLO_API_KEY }}
           TOKEN: ${{ secrets.TRELLO_TOKEN }}
@@ -26,21 +27,17 @@ jobs:
           CARD="${{ steps.parse.outputs.CARD_ID }}"
           ITEM="${{ steps.parse.outputs.ITEM_NAME }}"
 
-          # 1. Cocher la sous-tâche (on prend la première checklist)
-          CHECKLIST=$(curl -s "https://api.trello.com/1/cards/$CARD/checklists?key=$KEY&token=$TOKEN" | jq -r '.[0].id')
-          curl -s "https://api.trello.com/1/checklists/$CHECKLIST/checkItems" \
-               -X POST --data "name=$ITEM&checked=true&key=$KEY&token=$TOKEN"
+          # Récupère la première checklist
+          CHECKLIST_ID=$(curl -s "https://api.trello.com/1/cards/$CARD/checklists?key=$KEY&token=$TOKEN" | jq -r '.[0].id')
 
-          # 2. Vérifier la progression et déplacer
-          PROGRESS=$(curl -s "https://api.trello.com/1/cards/$CARD?fields=badges&key=$KEY&token=$TOKEN" | jq '.badges.checkItemsChecked')
-          TOTAL=$(curl -s "https://api.trello.com/1/cards/$CARD?fields=badges&key=$KEY&token=$TOKEN" | jq '.badges.checkItems')
+          # Trouve l’ID de l’item EXISTANT avec le bon nom
+          ITEM_ID=$(curl -s "https://api.trello.com/1/checklists/$CHECKLIST_ID/checkItems?key=$KEY&token=$TOKEN" | \
+                    jq -r --arg name "$ITEM" '.[] | select(.name == $name) | .id')
 
-          if [ "$PROGRESS" -eq 0 ]; then
-            echo "Aucune sous-tâche → reste en To Do"
-          elif [ "$PROGRESS" -eq "$TOTAL" ]; then
-            curl -s -X PUT "https://api.trello.com/1/cards/$CARD?key=$KEY&token=$TOKEN&idList=${{ secrets.TRELLO_LIST_DONE }}"
-            echo "Tout terminé → Done !"
+          if [[ -n "$ITEM_ID" && "$ITEM_ID" != "null" ]]; then
+            echo "Coche l'item existant : $ITEM"
+            curl -X PUT "https://api.trello.com/1/cards/$CARD/checkItem/$ITEM_ID \
+              -d "key=$KEY" -d "token=$TOKEN" -d "state=complete"
           else
-            curl -s -X PUT "https://api.trello.com/1/cards/$CARD?key=$KEY&token=$TOKEN&idList=${{ secrets.TRELLO_LIST_DOING }}"
-            echo "En cours → Doing !"
+            echo "Item '$ITEM' non trouvé → rien à cocher"
           fi
